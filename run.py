@@ -1,8 +1,12 @@
 import os
+
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 import sys
+import glob
 from typing import Union, OrderedDict
 from dotenv import load_dotenv
+import boto3
+
 # Load the .env file if it exists
 load_dotenv()
 
@@ -11,20 +15,28 @@ sys.path.insert(0, os.getcwd())
 # import toolkit.cuda_malloc
 
 # turn off diffusers telemetry until I can figure out how to make it opt-in
-os.environ['DISABLE_TELEMETRY'] = 'YES'
+os.environ["DISABLE_TELEMETRY"] = "YES"
 
 # check if we have DEBUG_TOOLKIT in env
 if os.environ.get("DEBUG_TOOLKIT", "0") == "1":
     # set torch to trace mode
     import torch
+
     torch.autograd.set_detect_anomaly(True)
+
 import argparse
 from toolkit.job import get_job
 
 
 def print_end_message(jobs_completed, jobs_failed):
-    failure_string = f"{jobs_failed} failure{'' if jobs_failed == 1 else 's'}" if jobs_failed > 0 else ""
-    completed_string = f"{jobs_completed} completed job{'' if jobs_completed == 1 else 's'}"
+    failure_string = (
+        f"{jobs_failed} failure{'' if jobs_failed == 1 else 's'}"
+        if jobs_failed > 0
+        else ""
+    )
+    completed_string = (
+        f"{jobs_completed} completed job{'' if jobs_completed == 1 else 's'}"
+    )
 
     print("")
     print("========================================")
@@ -36,30 +48,63 @@ def print_end_message(jobs_completed, jobs_failed):
     print("========================================")
 
 
+def upload_to_s3(folder_path: str, pattern: str = ".safetensors"):
+    s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        region_name=os.environ.get("SAVE_CHECKPOINT_AWS_REGION"),
+    )
+
+    files = glob.glob(os.path.join(folder_path, f"*{pattern}"))
+    object_path = f"{os.environ.get('USER_ID')}/{os.environ.get('JOB_ID')}"
+    for file in files:
+        print(
+            f"Uploading {file} to {os.environ.get('SAVE_CHECKPOINT_BUCKET_NAME')}/{object_path}"
+        )
+        s3_client.upload_file(
+            file,
+            bucket_name=os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME"),
+            key=os.path.join(object_path, os.path.basename(file)),
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
 
     # require at lease one config file
     parser.add_argument(
-        'config_file_list',
-        nargs='+',
+        "config_file_list",
+        nargs="+",
         type=str,
-        help='Name of config file (eg: person_v1 for config/person_v1.json/yaml), or full path if it is not in config folder, you can pass multiple config files and run them all sequentially'
+        help="Name of config file (eg: person_v1 for config/person_v1.json/yaml), or full path if it is not in config folder, you can pass multiple config files and run them all sequentially",
     )
 
     # flag to continue if failed job
     parser.add_argument(
-        '-r', '--recover',
-        action='store_true',
-        help='Continue running additional jobs even if a job fails'
+        "-r",
+        "--recover",
+        action="store_true",
+        help="Continue running additional jobs even if a job fails",
     )
 
     # flag to continue if failed job
     parser.add_argument(
-        '-n', '--name',
+        "-n",
+        "--name",
         type=str,
         default=None,
-        help='Name to replace [name] tag in config file, useful for shared config file'
+        help="Name to replace [name] tag in config file, useful for shared config file",
+    )
+    parser.add_argument(
+        "--shutdown", action="store_true", help="Automatically shut down when done"
+    )
+    parser.add_argument(
+        "--shutdown_time",
+        "-st",
+        type=int,
+        default=120,
+        help="Time to wait before automatically shutting down, in seconds.",
     )
     args = parser.parse_args()
 
@@ -70,7 +115,9 @@ def main():
     jobs_completed = 0
     jobs_failed = 0
 
-    print(f"Running {len(config_file_list)} job{'' if len(config_file_list) == 1 else 's'}")
+    print(
+        f"Running {len(config_file_list)} job{'' if len(config_file_list) == 1 else 's'}"
+    )
 
     for config_file in config_file_list:
         try:
@@ -85,6 +132,25 @@ def main():
                 print_end_message(jobs_completed, jobs_failed)
                 raise e
 
+    if args.shutdown:
+        import time
+        import subprocess
 
-if __name__ == '__main__':
+        pod_id = os.environ.get("RUNPOD_POD_ID", None)
+        if pod_id is not None:
+            print(
+                f"Automatic shut down is configured. Shutting down in {args.shutdown_time} seconds! Hit Control-C to cancel."
+            )
+            try:
+                time.sleep(args.shutdown_time)
+                subprocess.run(f"runpodctl stop pod {pod_id}", shell=True, check=False)
+            except KeyboardInterrupt:
+                print("Automatic shut down cancelled.")
+        else:
+            print(
+                "Automatic shut down was configured, but could not get environment $RUNPOD_POD_ID"
+            )
+
+
+if __name__ == "__main__":
     main()
