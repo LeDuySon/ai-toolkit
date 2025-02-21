@@ -27,6 +27,13 @@ if os.environ.get("DEBUG_TOOLKIT", "0") == "1":
 import argparse
 from toolkit.job import get_job
 
+print(f"Initializing S3 client connect to {os.environ.get('SAVE_CHECKPOINT_BUCKET_NAME')}")
+s3_client = boto3.client(
+    "s3",
+    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.environ.get("SAVE_CHECKPOINT_AWS_REGION"),
+)
 
 def print_end_message(jobs_completed, jobs_failed):
     failure_string = (
@@ -48,23 +55,18 @@ def print_end_message(jobs_completed, jobs_failed):
     print("========================================")
 
 
-def upload_to_s3(folder_path: str, pattern: str = ".safetensors"):
-    s3_client = boto3.client(
-        "s3",
-        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-        region_name=os.environ.get("SAVE_CHECKPOINT_AWS_REGION"),
-    )
-
+def upload_to_s3(folder_path: str, bucket_name: str, pattern: str = ".safetensors"):
     files = glob.glob(os.path.join(folder_path, f"*{pattern}"))
-    object_path = f"{os.environ.get('USER_ID')}/{os.environ.get('JOB_ID')}"
+    object_path = f"{os.environ.get('USER_ID')}/{os.environ.get('JOB_ID')}/lora_checkpoints"
+    
+    print(f"Uploading {len(files)} files to {bucket_name}/{object_path}")
     for file in files:
         print(
-            f"Uploading {file} to {os.environ.get('SAVE_CHECKPOINT_BUCKET_NAME')}/{object_path}"
+            f"Uploading {file} to {bucket_name}/{object_path}"
         )
         s3_client.upload_file(
             file,
-            bucket_name=os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME"),
+            bucket_name=bucket_name,
             key=os.path.join(object_path, os.path.basename(file)),
         )
 
@@ -121,10 +123,18 @@ def main():
 
     for config_file in config_file_list:
         try:
+            print(f"Running job: {config_file}")
             job = get_job(config_file, args.name)
             job.run()
             job.cleanup()
             jobs_completed += 1
+            
+            print(f"Job completed: {config_file}")
+            print(f"Output directory: {job.config}")
+            if os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME") is not None:
+                bucket_name = os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME")
+                upload_to_s3(job.output_dir, bucket_name)
+                
         except Exception as e:
             print(f"Error running job: {e}")
             jobs_failed += 1
