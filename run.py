@@ -133,7 +133,7 @@ def main():
             print(f"Output directory: {job.config}")
             if os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME") is not None:
                 bucket_name = os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME")
-                upload_to_s3(job.output_dir, bucket_name)
+                # upload_to_s3(job.output_dir, bucket_name)
                 
         except Exception as e:
             print(f"Error running job: {e}")
