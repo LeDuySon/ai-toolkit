@@ -69,6 +69,18 @@ def upload_to_s3(folder_path: str, bucket_name: str, pattern: str = ".safetensor
             bucket_name=bucket_name,
             key=os.path.join(object_path, os.path.basename(file)),
         )
+        
+def clear_target_folder(folder_path: str):
+    import shutil 
+    
+    # delete all files and folders in the workspace
+    for part in os.listdir(folder_path):
+        if os.path.isfile(os.path.join(folder_path, part)):
+            print(f"Deleting file: {os.path.join(folder_path, part)}")
+            os.remove(os.path.join(folder_path, part))
+        elif os.path.isdir(os.path.join(folder_path, part)):
+            print(f"Deleting folder: {os.path.join(folder_path, part)}")
+            shutil.rmtree(os.path.join(folder_path, part))
 
 
 def main():
@@ -102,11 +114,17 @@ def main():
         "--shutdown", action="store_true", help="Automatically shut down when done"
     )
     parser.add_argument(
-        "--shutdown_time",
+        "--shutdown-time",
         "-st",
         type=int,
         default=120,
         help="Time to wait before automatically shutting down, in seconds.",
+    )
+    parser.add_argument(
+        "--target-folder",
+        type=str,
+        default="/workspace",
+        help="Target folder to save the output, if not provided, the default will be /workspace",
     )
     args = parser.parse_args()
 
@@ -128,12 +146,17 @@ def main():
             job.run()
             job.cleanup()
             jobs_completed += 1
-            
+
             print(f"Job completed: {config_file}")
             print(f"Output directory: {job.config}")
             if os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME") is not None:
                 bucket_name = os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME")
-                # upload_to_s3(job.output_dir, bucket_name)
+                output_folder = job.config["process"][0]["training_folder"]
+                checkpoint_dir = os.path.join(output_folder, job.config["name"])
+                upload_to_s3(checkpoint_dir, bucket_name)
+                
+                print(f"Clearing target folder: {checkpoint_dir}")
+                clear_target_folder(args.target_folder)
                 
         except Exception as e:
             print(f"Error running job: {e}")
