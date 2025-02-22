@@ -66,8 +66,8 @@ def upload_to_s3(folder_path: str, bucket_name: str, pattern: str = ".safetensor
         )
         s3_client.upload_file(
             file,
-            bucket_name=bucket_name,
-            key=os.path.join(object_path, os.path.basename(file)),
+            Bucket=bucket_name,
+            Key=os.path.join(object_path, os.path.basename(file)),
         )
         
 def clear_target_folder(folder_path: str):
@@ -153,7 +153,7 @@ def main():
                 bucket_name = os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME")
                 output_folder = job.config["process"][0]["training_folder"]
                 checkpoint_dir = os.path.join(output_folder, job.config["name"])
-                upload_to_s3(checkpoint_dir, bucket_name)
+                upload_to_s3(folder_path=checkpoint_dir, bucket_name=bucket_name)
                 
                 print(f"Clearing target folder: {checkpoint_dir}")
                 clear_target_folder(args.target_folder)
