@@ -27,13 +27,16 @@ if os.environ.get("DEBUG_TOOLKIT", "0") == "1":
 import argparse
 from toolkit.job import get_job
 
-print(f"Initializing S3 client connect to {os.environ.get('SAVE_CHECKPOINT_BUCKET_NAME')}")
+print(
+    f"Initializing S3 client connect to {os.environ.get('SAVE_CHECKPOINT_BUCKET_NAME')}"
+)
 s3_client = boto3.client(
     "s3",
     aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
     aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
     region_name=os.environ.get("SAVE_CHECKPOINT_AWS_REGION"),
 )
+
 
 def print_end_message(jobs_completed, jobs_failed):
     failure_string = (
@@ -55,24 +58,33 @@ def print_end_message(jobs_completed, jobs_failed):
     print("========================================")
 
 
-def upload_to_s3(folder_path: str, bucket_name: str, pattern: str = ".safetensors"):
+def upload_to_s3(
+    folder_path: str, bucket_name: str, job_name: str, pattern: str = ".safetensors"
+):
     files = glob.glob(os.path.join(folder_path, f"*{pattern}"))
-    object_path = f"{os.environ.get('USER_ID')}/{os.environ.get('JOB_ID')}/lora_checkpoints"
-    
+    object_path = (
+        f"{os.environ.get('USER_ID')}/{os.environ.get('JOB_ID')}/lora_checkpoints"
+    )
+
     print(f"Uploading {len(files)} files to {bucket_name}/{object_path}")
     for file in files:
-        print(
-            f"Uploading {file} to {bucket_name}/{object_path}"
-        )
+        print(f"Uploading {file} to {bucket_name}/{object_path}")
+        file_name = os.path.basename(file).split(".")[0]
+        if file_name == job_name:
+            object_key = os.path.join(object_path, "latest.safetensors")
+        else:
+            object_key = os.path.join(object_path, f"{file_name}.safetensors")
+
         s3_client.upload_file(
             file,
             Bucket=bucket_name,
-            Key=os.path.join(object_path, os.path.basename(file)),
+            Key=object_key,
         )
-        
+
+
 def clear_target_folder(folder_path: str):
-    import shutil 
-    
+    import shutil
+
     # delete all files and folders in the workspace
     for part in os.listdir(folder_path):
         if os.path.isfile(os.path.join(folder_path, part)):
@@ -81,6 +93,26 @@ def clear_target_folder(folder_path: str):
         elif os.path.isdir(os.path.join(folder_path, part)):
             print(f"Deleting folder: {os.path.join(folder_path, part)}")
             shutil.rmtree(os.path.join(folder_path, part))
+
+
+def shutdown_runpod(args):
+    import time
+    import subprocess
+
+    pod_id = os.environ.get("RUNPOD_POD_ID", None)
+    if pod_id is not None:
+        print(
+            f"Automatic shut down is configured. Shutting down in {args.shutdown_time} seconds! Hit Control-C to cancel."
+        )
+        try:
+            time.sleep(args.shutdown_time)
+            subprocess.run(f"runpodctl stop pod {pod_id}", shell=True, check=False)
+        except KeyboardInterrupt:
+            print("Automatic shut down cancelled.")
+    else:
+        print(
+            "Automatic shut down was configured, but could not get environment $RUNPOD_POD_ID"
+        )
 
 
 def main():
@@ -153,36 +185,27 @@ def main():
                 bucket_name = os.environ.get("SAVE_CHECKPOINT_BUCKET_NAME")
                 output_folder = job.config["process"][0]["training_folder"]
                 checkpoint_dir = os.path.join(output_folder, job.config["name"])
-                upload_to_s3(folder_path=checkpoint_dir, bucket_name=bucket_name)
-                
+                upload_to_s3(
+                    folder_path=checkpoint_dir,
+                    bucket_name=bucket_name,
+                    job_name=job.config["name"],
+                )
+
                 print(f"Clearing target folder: {checkpoint_dir}")
                 clear_target_folder(args.target_folder)
-                
+
         except Exception as e:
             print(f"Error running job: {e}")
             jobs_failed += 1
             if not args.recover:
                 print_end_message(jobs_completed, jobs_failed)
-                raise e
+                raise
+        finally:
+            if args.shutdown:
+                shutdown_runpod(args)
 
     if args.shutdown:
-        import time
-        import subprocess
-
-        pod_id = os.environ.get("RUNPOD_POD_ID", None)
-        if pod_id is not None:
-            print(
-                f"Automatic shut down is configured. Shutting down in {args.shutdown_time} seconds! Hit Control-C to cancel."
-            )
-            try:
-                time.sleep(args.shutdown_time)
-                subprocess.run(f"runpodctl stop pod {pod_id}", shell=True, check=False)
-            except KeyboardInterrupt:
-                print("Automatic shut down cancelled.")
-        else:
-            print(
-                "Automatic shut down was configured, but could not get environment $RUNPOD_POD_ID"
-            )
+        shutdown_runpod(args)
 
 
 if __name__ == "__main__":
